@@ -70,11 +70,63 @@ RUN --mount=from=build-scripts,source=build-scripts,target=/nvidia/build-scripts
   || [[ ! "${FRAMEWORK}" == "jax" ]]
 EOF
 
+# Optionally install a different cuDNN backend version.
+# Set CUDNN_BACKEND_URL to a tarball URL to override the version in the base image.
+# Leave empty/unset to use the cuDNN already present in the container.
+ARG CUDNN_BACKEND_URL=""
+
+# Log the cuDNN version present in the base image
+RUN <<"EOF" bash -e
+  LOG=/var/log/cudnn_install.log
+  HEADER=$(find /usr/include /usr/local/include -name "cudnn_version.h" 2>/dev/null | head -1)
+  if [[ -n "${HEADER}" ]]; then
+    MAJOR=$(grep "#define CUDNN_MAJOR" "${HEADER}" | awk '{print $3}')
+    MINOR=$(grep "#define CUDNN_MINOR" "${HEADER}" | awk '{print $3}')
+    PATCH=$(grep "#define CUDNN_PATCHLEVEL" "${HEADER}" | awk '{print $3}')
+    BASE_VER="${MAJOR}.${MINOR}.${PATCH}"
+    DPKG_VER=$(dpkg-query -W -f='${Version}\n' 'libcudnn9-cuda-*' 2>/dev/null | head -1)
+    [[ -n "${DPKG_VER}" ]] && BASE_VER="${DPKG_VER}"
+  else
+    BASE_VER="unknown"
+  fi
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] base-image cuDNN: ${BASE_VER}" >> "${LOG}"
+EOF
+
+RUN <<"EOF" bash -e
+  if [[ -z "${CUDNN_BACKEND_URL}" ]]; then
+    echo "CUDNN_BACKEND_URL not set; using cuDNN from base image"
+    exit 0
+  fi
+
+  LOG=/var/log/cudnn_install.log
+  echo "FRAMEWORK is ${FRAMEWORK}"
+  echo "cuDNN override URL: ${CUDNN_BACKEND_URL}"
+
+  cd /opt
+  wget "${CUDNN_BACKEND_URL}"
+  TAR_FILE=$(basename "${CUDNN_BACKEND_URL}")
+  tar xvf "${TAR_FILE}"
+  rm -f "${TAR_FILE}"
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] installed cuDNN from ${CUDNN_BACKEND_URL} (framework: ${FRAMEWORK})" >> "${LOG}"
+  echo "Installed cuDNN override for ${FRAMEWORK} from ${CUDNN_BACKEND_URL}"
+
+  # Make the override visible to the linker
+  echo "/opt/cudnn/lib" > /etc/ld.so.conf.d/cudnn-override.conf
+  ldconfig
+EOF
+
 # Install Transformer Engine
 RUN <<"EOF" bash -e
   export CCACHE_DIR=/ccache
   export CCACHE_MAXSIZE=10G
   export NVTE_USE_CCACHE=1
+
+  # If a cuDNN override was installed to /opt/cudnn, make it visible
+  if [[ -d /opt/cudnn ]]; then
+    export LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"
+    export CUDNN_PATH="/opt/cudnn"
+    export CUDNN_HOME="/opt/cudnn"
+  fi
 
   [[ "${FRAMEWORK}" =~ pytorch|all ]] \
   && export NVTE_WITH_USERBUFFERS=1 \
@@ -97,6 +149,25 @@ RUN <<"EOF" bash -e
   ccache --show-stats
 
   rm -rf transformer_engine.egg-info dist build
+
+  LOG=/var/log/cudnn_install.log
+  FE_INFO=/opt/transformerengine/3rdparty/cudnn-frontend/.build_info
+  if [[ -f "${FE_INFO}" ]]; then
+    FE_COMMIT=$(grep '^commit=' "${FE_INFO}" | cut -d= -f2-)
+    FE_REMOTE=$(grep '^remote=' "${FE_INFO}" | cut -d= -f2-)
+    FE_SOURCE=$(grep '^source=' "${FE_INFO}" | cut -d= -f2-)
+  else
+    FE_COMMIT="unknown"
+    FE_REMOTE="unknown"
+    FE_SOURCE="no .build_info found"
+  fi
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] cudnn-frontend: commit ${FE_COMMIT} remote ${FE_REMOTE} (${FE_SOURCE})" >> "${LOG}"
+EOF
+
+RUN <<"EOF" bash -e
+  echo "=== cuDNN install history ==="
+  cat /var/log/cudnn_install.log
+  echo "============================="
 EOF
 
 WORKDIR /workspace/

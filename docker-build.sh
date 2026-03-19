@@ -317,6 +317,11 @@ if [[ "$BUILD_BASE" -eq 1 ]]; then
     CCACHE_BUILD_ARG="--build-arg CCACHE_IMAGE=${CCACHE_IMAGE}"
   fi
 
+  CUDNN_BACKEND_URL_ARG=""
+  if [[ -n "${CUDNN_BACKEND_URL}" ]]; then
+    CUDNN_BACKEND_URL_ARG="--build-arg CUDNN_BACKEND_URL=${CUDNN_BACKEND_URL}"
+  fi
+
   export DOCKER_CLI_EXPERIMENTAL=enabled
   docker buildx create --name buildkit --node node_${CI_RUNNER_ID} --config dlfw-ci/buildkitd.toml \
     --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=10485760 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SPEED=10485760 --use
@@ -331,6 +336,7 @@ if [[ "$BUILD_BASE" -eq 1 ]]; then
       $FROM_IMAGE_ARG \
       $FRAMEWORK_ARG \
       ${CCACHE_BUILD_ARG} \
+      ${CUDNN_BACKEND_URL_ARG} \
       -f Dockerfile.base ${PUSH_ARG} .
   RV=$?
   echo "exit code from the previous command -> $RV"
