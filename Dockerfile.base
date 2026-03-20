@@ -75,6 +75,10 @@ EOF
 # Leave empty/unset to use the cuDNN already present in the container.
 ARG CUDNN_BACKEND_URL=""
 
+# Optionally install Flash Attention 3 (SM90 / H100 only) for PyTorch.
+# Set INSTALL_FA3=1 to enable.
+ARG INSTALL_FA3=""
+
 # Log the cuDNN version present in the base image
 RUN <<"EOF" bash -e
   LOG=/var/log/cudnn_install.log
@@ -164,6 +168,35 @@ RUN <<"EOF" bash -e
     FE_SOURCE="no .build_info found"
   fi
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] cudnn-frontend: commit ${FE_COMMIT} remote ${FE_REMOTE} (${FE_SOURCE})" >> "${LOG}"
+EOF
+
+# Optionally install Flash Attention 3 from source (Hopper+, PyTorch only)
+RUN <<"EOF" bash -e
+  if [[ -z "${INSTALL_FA3}" ]]; then
+    echo "INSTALL_FA3 not set; skipping Flash Attention 3"
+    exit 0
+  fi
+
+  if [[ ! "${FRAMEWORK}" =~ pytorch|all ]]; then
+    echo "FA3 install requested but FRAMEWORK=${FRAMEWORK} is not pytorch; skipping"
+    exit 0
+  fi
+
+  export FLASH_ATTN_CUDA_ARCHS=90
+  export MAX_JOBS=32
+
+  cd /tmp
+  git clone https://github.com/Dao-AILab/flash-attention.git
+  cd flash-attention/hopper
+  python3 setup.py install
+
+  SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])")
+  mkdir -p "${SITE_PACKAGES}/flash_attn_3"
+  cp flash_attn_interface.py "${SITE_PACKAGES}/flash_attn_3/"
+
+  cd /
+  rm -rf /tmp/flash-attention
+  echo "Installed Flash Attention 3 (SM90 / H100)"
 EOF
 
 RUN <<"EOF" bash -e
