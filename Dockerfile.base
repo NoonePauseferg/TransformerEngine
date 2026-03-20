@@ -114,28 +114,37 @@ RUN <<"EOF" bash -e
   echo "/opt/cudnn/lib" > /etc/ld.so.conf.d/cudnn-override.conf
   ldconfig
 
-  # For core containers, persist cuDNN env vars (pytorch/jax base images set these already)
+  # For core containers, persist cuDNN env vars (pytorch/jax base images set these already).
+  # Write to multiple locations so the vars are visible in login shells (/etc/profile.d),
+  # interactive non-login shells (/etc/bash.bashrc), and PAM-based sessions (/etc/environment).
   if [[ "${FRAMEWORK}" == "core" ]]; then
     {
       echo 'export LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"'
       echo 'export CUDNN_PATH="/opt/cudnn"'
       echo 'export CUDNN_HOME="/opt/cudnn"'
-    } > /etc/profile.d/cudnn-override.sh
+    } | tee /etc/profile.d/cudnn-override.sh >> /etc/bash.bashrc
+
+    {
+      echo 'LD_LIBRARY_PATH="/opt/cudnn/lib"'
+      echo 'CUDNN_PATH="/opt/cudnn"'
+      echo 'CUDNN_HOME="/opt/cudnn"'
+    } >> /etc/environment
   fi
 EOF
+
+ENV LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"
+ENV CUDNN_PATH="/opt/cudnn"
+ENV CUDNN_HOME="/opt/cudnn"
+
+RUN echo LD_LIBRARY_PATH is ${LD_LIBRARY_PATH}
+RUN echo CUDNN_PATH is ${CUDNN_PATH}
+RUN echo CUDNN_HOME is ${CUDNN_HOME}
 
 # Install Transformer Engine
 RUN <<"EOF" bash -e
   export CCACHE_DIR=/ccache
   export CCACHE_MAXSIZE=10G
   export NVTE_USE_CCACHE=1
-
-  # If a cuDNN override was installed to /opt/cudnn, make it visible
-  if [[ -d /opt/cudnn ]]; then
-    export LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"
-    export CUDNN_PATH="/opt/cudnn"
-    export CUDNN_HOME="/opt/cudnn"
-  fi
 
   [[ "${FRAMEWORK}" =~ pytorch|all ]] \
   && export NVTE_WITH_USERBUFFERS=1 \
