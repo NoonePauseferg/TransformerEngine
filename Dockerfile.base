@@ -114,22 +114,6 @@ RUN <<"EOF" bash -e
   echo "/opt/cudnn/lib" > /etc/ld.so.conf.d/cudnn-override.conf
   ldconfig
 
-  # For core containers, persist cuDNN env vars (pytorch/jax base images set these already).
-  # Write to multiple locations so the vars are visible in login shells (/etc/profile.d),
-  # interactive non-login shells (/etc/bash.bashrc), and PAM-based sessions (/etc/environment).
-  if [[ "${FRAMEWORK}" == "core" ]]; then
-    {
-      echo 'export LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"'
-      echo 'export CUDNN_PATH="/opt/cudnn"'
-      echo 'export CUDNN_HOME="/opt/cudnn"'
-    } | tee /etc/profile.d/cudnn-override.sh >> /etc/bash.bashrc
-
-    {
-      echo 'LD_LIBRARY_PATH="/opt/cudnn/lib"'
-      echo 'CUDNN_PATH="/opt/cudnn"'
-      echo 'CUDNN_HOME="/opt/cudnn"'
-    } >> /etc/environment
-  fi
 EOF
 
 ENV LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"
