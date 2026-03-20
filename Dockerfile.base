@@ -113,6 +113,15 @@ RUN <<"EOF" bash -e
   # Make the override visible to the linker
   echo "/opt/cudnn/lib" > /etc/ld.so.conf.d/cudnn-override.conf
   ldconfig
+
+  # For core containers, persist cuDNN env vars (pytorch/jax base images set these already)
+  if [[ "${FRAMEWORK}" == "core" ]]; then
+    {
+      echo 'export LD_LIBRARY_PATH="/opt/cudnn/lib:${LD_LIBRARY_PATH}"'
+      echo 'export CUDNN_PATH="/opt/cudnn"'
+      echo 'export CUDNN_HOME="/opt/cudnn"'
+    } > /etc/profile.d/cudnn-override.sh
+  fi
 EOF
 
 # Install Transformer Engine
