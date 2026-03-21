@@ -87,6 +87,8 @@ variables:
       description: Override 3rdparty/cudnn-frontend to this branch or commit from https://gitlab-master.nvidia.com/cudnn/cudnn_frontend.git (e.g. develop or a commit SHA). Leave empty/unset to use submodules from the TransformerEngine repo (no override).
     CUDNN_BACKEND_URL:
       description: Override cuDNN backend URL for the base image build (e.g. https://urm.nvidia.com/artifactory/hw-cudnn-generic-local/CUDNN/v9.21/v9.21.0.19/13.2/cudnn-linux-x86_64-9.21.0.19.tar.gz). Leave empty/unset to use the default cuDNN version.
+    INSTALL_FA3:
+      description: Install Flash Attention 3 from source (SM90 / H100 only, PyTorch). Set to 1 to enable.
 
     VIRTUAL: 0
     JOB_START_STRING: "=== JOB START ==="
@@ -282,6 +284,7 @@ before_script:
             --form "variables[PIPELINE_NAME]=${PIPELINE_NAME}" \
             --form "variables[CUDNN_FRONTEND_REF]=${CUDNN_FRONTEND_REF}" \
             --form "variables[CUDNN_BACKEND_URL]=${CUDNN_BACKEND_URL}" \
+            --form "variables[INSTALL_FA3]=${INSTALL_FA3}" \
             --form "variables[githubData]=${githubData}" \
             https://gitlab-master.nvidia.com/api/v4/projects/61603/trigger/pipeline | grep 201) || true
           echo "\n" | cat ${tmp_file} -
