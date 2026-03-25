@@ -89,6 +89,8 @@ variables:
       description: Override cuDNN backend URL for the base image build (e.g. https://urm.nvidia.com/artifactory/hw-cudnn-generic-local/CUDNN/v9.21/v9.21.0.19/13.2/cudnn-linux-x86_64-9.21.0.19.tar.gz). Leave empty/unset to use the default cuDNN version.
     INSTALL_FA3:
       description: Install Flash Attention 3 from source (SM90 / H100 only, PyTorch). Set to 1 to enable.
+    PIPELINE_NAME:
+      description: Custom pipeline name shown in the GitLab UI. Leave empty for default behavior.
 
     VIRTUAL: 0
     JOB_START_STRING: "=== JOB START ==="
@@ -285,6 +287,7 @@ before_script:
             --form "variables[CUDNN_FRONTEND_REF]=${CUDNN_FRONTEND_REF}" \
             --form "variables[CUDNN_BACKEND_URL]=${CUDNN_BACKEND_URL}" \
             --form "variables[INSTALL_FA3]=${INSTALL_FA3}" \
+            --form "variables[PIPELINE_NAME]=${PIPELINE_NAME}" \
             --form "variables[githubData]=${githubData}" \
             https://gitlab-master.nvidia.com/api/v4/projects/61603/trigger/pipeline | grep 201) || true
           echo "\n" | cat ${tmp_file} -
