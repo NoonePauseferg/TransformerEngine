@@ -159,15 +159,25 @@ RUN <<"EOF" bash -e
   LOG=/var/log/cudnn_install.log
   FE_INFO=/opt/transformerengine/3rdparty/cudnn-frontend/.build_info
   if [[ -f "${FE_INFO}" ]]; then
-    FE_COMMIT=$(grep '^commit=' "${FE_INFO}" | cut -d= -f2-)
-    FE_REMOTE=$(grep '^remote=' "${FE_INFO}" | cut -d= -f2-)
-    FE_SOURCE=$(grep '^source=' "${FE_INFO}" | cut -d= -f2-)
+    # Parse sectioned .build_info (supports both old flat and new [section] formats)
+    FE_COMMIT=$(grep '^commit=' "${FE_INFO}" | head -1 | cut -d= -f2-)
+    FE_SOURCE=$(grep '^source=' "${FE_INFO}" | head -1 | cut -d= -f2-)
+    FE_REMOTE=$(grep '^remote=' "${FE_INFO}" | head -1 | cut -d= -f2-)
+    BE_URL=$(grep '^url=' "${FE_INFO}" | head -1 | cut -d= -f2-)
+    BE_SOURCE=$(sed -n '/\[cudnn-backend\]/,/^$/{ /^source=/s/^source=//p; }' "${FE_INFO}")
   else
     FE_COMMIT="unknown"
-    FE_REMOTE="unknown"
     FE_SOURCE="no .build_info found"
+    FE_REMOTE=""
+    BE_URL=""
+    BE_SOURCE=""
   fi
-  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] cudnn-frontend: commit ${FE_COMMIT} remote ${FE_REMOTE} (${FE_SOURCE})" >> "${LOG}"
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] cudnn-frontend: commit=${FE_COMMIT} (${FE_SOURCE})" >> "${LOG}"
+  if [[ -n "${BE_URL}" ]]; then
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] cudnn-backend: ${BE_URL} (${BE_SOURCE})" >> "${LOG}"
+  else
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] cudnn-backend: ${BE_SOURCE:-base image default}" >> "${LOG}"
+  fi
 EOF
 
 # Optionally install Flash Attention 3 from source (Hopper+, PyTorch only)
