@@ -181,6 +181,7 @@ RUN <<"EOF" bash -e
 EOF
 
 # Optionally install Flash Attention 3 from source (Hopper+, PyTorch only)
+# setup.py install registers flash_attn_interface directly (GH PR #2849)
 RUN <<"EOF" bash -e
   if [[ -z "${INSTALL_FA3}" ]]; then
     echo "INSTALL_FA3 not set; skipping Flash Attention 3"
@@ -199,10 +200,6 @@ RUN <<"EOF" bash -e
   git clone https://github.com/Dao-AILab/flash-attention.git
   cd flash-attention/hopper
   python3 setup.py install
-
-  SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])")
-  mkdir -p "${SITE_PACKAGES}/flash_attn_3"
-  cp flash_attn_interface.py "${SITE_PACKAGES}/flash_attn_3/"
 
   cd /
   rm -rf /tmp/flash-attention

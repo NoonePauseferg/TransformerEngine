@@ -83,10 +83,8 @@ variables:
     PIPELINE_NAME:
       description: Custom pipeline name shown in the GitLab UI and Slackbot messages. Leave empty for default behavior.
       value: ""
-    CUDNN_FRONTEND_GITLAB_REF:
-      description: Override 3rdparty/cudnn-frontend to a branch or commit from https://gitlab-master.nvidia.com/cudnn/cudnn_frontend.git. Mutually exclusive with CUDNN_FRONTEND_GITHUB_REF.
-    CUDNN_FRONTEND_GITHUB_REF:
-      description: Override 3rdparty/cudnn-frontend to a branch or commit from https://github.com/NVIDIA/cudnn-frontend.git. Mutually exclusive with CUDNN_FRONTEND_GITLAB_REF.
+    CUDNN_FRONTEND_OVERRIDE:
+      description: "Override 3rdparty/cudnn-frontend: paste a GitHub or GitLab browser URL, e.g. https://github.com/NVIDIA/cudnn-frontend/tree/main or https://gitlab-master.nvidia.com/cudnn/cudnn_frontend/-/commit/<sha>"
     CUDNN_BACKEND_URL:
       description: Override cuDNN backend URL for the base image build (e.g. https://urm.nvidia.com/artifactory/hw-cudnn-generic-local/CUDNN/v9.21/v9.21.0.19/13.2/cudnn-linux-x86_64-9.21.0.19.tar.gz). Leave empty/unset to use the default cuDNN version.
     INSTALL_FA3:
@@ -136,80 +134,82 @@ stages:
       CUDNN_GL_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-master.nvidia.com/cudnn/cudnn_frontend.git"
       CUDNN_SUBMODULE_PATH="3rdparty/cudnn-frontend"
 
-      echo "CUDNN_FRONTEND_GITLAB_REF=${CUDNN_FRONTEND_GITLAB_REF:-<unset>}"
-      echo "CUDNN_FRONTEND_GITHUB_REF=${CUDNN_FRONTEND_GITHUB_REF:-<unset>}"
+      echo "CUDNN_FRONTEND_OVERRIDE=${CUDNN_FRONTEND_OVERRIDE:-<unset>}"
       echo "CUDNN_BACKEND_URL=${CUDNN_BACKEND_URL:-<unset>}"
 
-      # Case 9: both overrides set — ambiguous, fail fast
-      if [ -n "${CUDNN_FRONTEND_GITLAB_REF}" ] && [ -n "${CUDNN_FRONTEND_GITHUB_REF}" ]; then
-        echo "ERROR: Both CUDNN_FRONTEND_GITLAB_REF and CUDNN_FRONTEND_GITHUB_REF are set."
-        echo "  CUDNN_FRONTEND_GITLAB_REF=${CUDNN_FRONTEND_GITLAB_REF}"
-        echo "  CUDNN_FRONTEND_GITHUB_REF=${CUDNN_FRONTEND_GITHUB_REF}"
-        echo "These are mutually exclusive — set only one. Aborting."
-        exit 1
-      fi
-
-      # Phase 1: init submodules.
-      # GitHub and GitLab cudnn-frontend are independent repos (different commit
-      # histories). Try .gitmodules URL first; on failure, try the other source.
+      # Phase 1: init all submodules except cudnn-frontend.
+      # cudnn-frontend is handled separately because the GitHub and GitLab repos
+      # have independent commit histories — the .gitmodules URL may not have the
+      # commit the tree pointer references.
       GITMODULES_URL=$(git config -f .gitmodules submodule.${CUDNN_SUBMODULE_PATH}.url 2>/dev/null)
       EXPECTED_SHA=$(git ls-tree HEAD ${CUDNN_SUBMODULE_PATH} | awk '{print $3}')
-      echo "Phase 1: .gitmodules URL=${GITMODULES_URL}"
-      echo "Phase 1: expected submodule commit=${EXPECTED_SHA}"
-      git submodule update --init --recursive && echo "Phase 1: submodule init succeeded (first try)" || {
-        if echo "${GITMODULES_URL}" | grep -q gitlab; then
-          echo "Phase 1: submodule init failed; retrying cudnn-frontend from GitHub (fallback)..."
-          git config submodule.${CUDNN_SUBMODULE_PATH}.url "${CUDNN_GH_URL}"
+      echo "Phase 1: .gitmodules FE URL=${GITMODULES_URL}"
+      echo "Phase 1: tree pointer FE commit=${EXPECTED_SHA}"
+      git -c submodule."${CUDNN_SUBMODULE_PATH}".update=none submodule update --init --recursive
+      echo "Phase 1: done"
+
+      # Phase 2: initialize cudnn-frontend.
+      # Source and ref come from CUDNN_FRONTEND_OVERRIDE (browser URL) or the
+      # default submodule (.gitmodules URL + tree pointer). No fallback to the
+      # other remote — if the ref doesn't exist, fail so the user knows.
+      FE_URL=""
+      FE_REF=""
+      FE_LABEL=""
+      if [ -n "${CUDNN_FRONTEND_OVERRIDE}" ]; then
+        if echo "${CUDNN_FRONTEND_OVERRIDE}" | grep -q "github.com/NVIDIA/cudnn-frontend"; then
+          FE_URL="${CUDNN_GH_URL}"
+          FE_REF=$(echo "${CUDNN_FRONTEND_OVERRIDE}" | sed -E 's#https://github.com/NVIDIA/cudnn-frontend/(tree|commit)/##; s#/$##; s#\?.*##')
+        elif echo "${CUDNN_FRONTEND_OVERRIDE}" | grep -q "gitlab-master.nvidia.com/cudnn/cudnn_frontend"; then
+          FE_URL="${CUDNN_GL_URL}"
+          FE_REF=$(echo "${CUDNN_FRONTEND_OVERRIDE}" | sed -E 's#https://gitlab-master.nvidia.com/cudnn/cudnn_frontend/-/(tree|commit)/##; s#/$##; s#\?.*##')
         else
-          echo "Phase 1: submodule init failed; retrying cudnn-frontend from GitLab (fallback)..."
-          git config submodule.${CUDNN_SUBMODULE_PATH}.url "${CUDNN_GL_URL}"
+          echo "ERROR: Unrecognized CUDNN_FRONTEND_OVERRIDE URL."
+          echo "  Got: ${CUDNN_FRONTEND_OVERRIDE}"
+          echo "  Expected:"
+          echo "    https://github.com/NVIDIA/cudnn-frontend/{tree,commit}/<ref>"
+          echo "    https://gitlab-master.nvidia.com/cudnn/cudnn_frontend/-/{tree,commit}/<ref>"
+          exit 1
         fi
-        git submodule update --init --recursive && echo "Phase 1: submodule init succeeded (fallback)" || \
-          echo "Phase 1: WARNING — recursive submodule init incomplete (non-fatal, may be auth on sub-submodules)"
-      }
-      # Verify cudnn-frontend specifically was init'd
-      ACTUAL_SHA=$(git -C ${CUDNN_SUBMODULE_PATH} rev-parse HEAD 2>/dev/null || echo "MISSING")
-      echo "Phase 1: cudnn-frontend HEAD=${ACTUAL_SHA} (expected=${EXPECTED_SHA})"
-      if [ "${ACTUAL_SHA}" = "MISSING" ]; then
-        echo "Phase 1: FATAL — cudnn-frontend submodule not initialized"; exit 1
-      fi
-
-      # Phase 2: optional ref override.
-      FE_OVERRIDE_REF=""
-      FE_OVERRIDE_URL=""
-      FE_OVERRIDE_LABEL=""
-      if [ -n "${CUDNN_FRONTEND_GITLAB_REF}" ]; then
-        FE_OVERRIDE_REF="${CUDNN_FRONTEND_GITLAB_REF}"
-        FE_OVERRIDE_URL="${CUDNN_GL_URL}"
-        FE_OVERRIDE_LABEL="gitlab-override (CUDNN_FRONTEND_GITLAB_REF=${CUDNN_FRONTEND_GITLAB_REF})"
-      elif [ -n "${CUDNN_FRONTEND_GITHUB_REF}" ]; then
-        FE_OVERRIDE_REF="${CUDNN_FRONTEND_GITHUB_REF}"
-        FE_OVERRIDE_URL="${CUDNN_GH_URL}"
-        FE_OVERRIDE_LABEL="github-override (CUDNN_FRONTEND_GITHUB_REF=${CUDNN_FRONTEND_GITHUB_REF})"
-      fi
-
-      if [ -n "${FE_OVERRIDE_REF}" ]; then
-        echo "Phase 2: overriding cudnn-frontend — ${FE_OVERRIDE_LABEL}"
-        git -C "${CUDNN_SUBMODULE_PATH}" fetch "${FE_OVERRIDE_URL}" "${FE_OVERRIDE_REF}" && \
-        git -C "${CUDNN_SUBMODULE_PATH}" checkout FETCH_HEAD || {
-          echo "Direct ref fetch failed; fetching all branches and retrying..."
-          git -C "${CUDNN_SUBMODULE_PATH}" fetch "${FE_OVERRIDE_URL}" "+refs/heads/*:refs/remotes/origin/*"
-          git -C "${CUDNN_SUBMODULE_PATH}" checkout "${FE_OVERRIDE_REF}"
+        if [ -z "${FE_REF}" ]; then
+          echo "ERROR: Could not parse ref from CUDNN_FRONTEND_OVERRIDE."
+          echo "  Got: ${CUDNN_FRONTEND_OVERRIDE}"
+          exit 1
+        fi
+        FE_LABEL="override (${CUDNN_FRONTEND_OVERRIDE})"
+        echo "Phase 2: override — ref=${FE_REF}"
+        rm -rf "${CUDNN_SUBMODULE_PATH}"
+        git clone --no-checkout "${FE_URL}" "${CUDNN_SUBMODULE_PATH}"
+        git -C "${CUDNN_SUBMODULE_PATH}" checkout "${FE_REF}" || {
+          echo "ERROR: ref '${FE_REF}' not found on remote."
+          echo "  URL: ${CUDNN_FRONTEND_OVERRIDE}"
+          echo "  Verify the branch, tag, or commit exists."
+          exit 1
         }
-        echo "Phase 2: cudnn-frontend checked out at $(git -C ${CUDNN_SUBMODULE_PATH} rev-parse HEAD)"
       else
-        echo "Phase 2: no override — using submodule default ($(git -C ${CUDNN_SUBMODULE_PATH} rev-parse HEAD))"
+        FE_LABEL="default submodule"
+        echo "Phase 2: default — .gitmodules URL + tree pointer"
+        git submodule update --init "${CUDNN_SUBMODULE_PATH}" || {
+          echo "ERROR: cudnn-frontend submodule init failed."
+          echo "  .gitmodules URL: ${GITMODULES_URL}"
+          echo "  Expected commit: ${EXPECTED_SHA}"
+          echo "  This commit likely doesn't exist on that remote."
+          echo "  Fix the submodule pointer in your branch or set CUDNN_FRONTEND_OVERRIDE"
+          echo "  to a valid GitHub/GitLab cudnn-frontend URL."
+          exit 1
+        }
       fi
+      git -C "${CUDNN_SUBMODULE_PATH}" submodule update --init --recursive 2>/dev/null || true
+      echo "Phase 2: cudnn-frontend at $(git -C ${CUDNN_SUBMODULE_PATH} rev-parse HEAD)"
 
       # Write build metadata (git info is lost after Docker COPY)
       {
         echo "[cudnn-frontend]"
         echo "commit=$(git -C ${CUDNN_SUBMODULE_PATH} rev-parse HEAD)"
-        if [ -n "${FE_OVERRIDE_REF}" ]; then
-          echo "source=${FE_OVERRIDE_LABEL}"
+        echo "source=${FE_LABEL}"
+        if [ -n "${CUDNN_FRONTEND_OVERRIDE}" ]; then
+          echo "override_url=${CUDNN_FRONTEND_OVERRIDE}"
         else
-          echo "remote=$(git -C ${CUDNN_SUBMODULE_PATH} remote get-url origin 2>/dev/null || echo unknown)"
-          echo "source=default submodule"
+          echo "remote=${GITMODULES_URL}"
         fi
         echo ""
         echo "[cudnn-backend]"
@@ -281,8 +281,8 @@ before_script:
     - git rebase github/${GH_BRANCH}
     - export GH_PR_LIST=$(echo "${GH_PR}" | tr ',' ' ' | xargs)                                      && echo "${GH_PR_LIST}"
     - export GL_MR_LIST=$(echo "${GL_MR}" | tr ',' ' ' | xargs)                                      && echo "${GL_MR_LIST}"
-    # CUDNN_FRONTEND_GITLAB_REF / CUDNN_FRONTEND_GITHUB_REF overrides are handled
-    # by downstream jobs (build base, build devel, etc.) via .cudnn_frontend_submodule_setup.
+    # CUDNN_FRONTEND_OVERRIDE is handled by downstream jobs (build base, build
+    # devel, etc.) via .cudnn_frontend_submodule_setup.
     - BUILD_BRANCH_NAME=test
     - test ${RELEASE} && BUILD_BRANCH_NAME=build
     - test ${GH_NIGHTLY} && BUILD_BRANCH_NAME=nightly_${CI_TIMESTAMP}
@@ -384,8 +384,7 @@ before_script:
             --form "variables[SEND_SLACK_MESSAGE]=${SEND_SLACK_MESSAGE}" \
             --form "variables[SLACK_PING_TEST_OWNERS]=${SLACK_PING_TEST_OWNERS}" \
             --form "variables[PIPELINE_NAME]=${PIPELINE_NAME}" \
-            --form "variables[CUDNN_FRONTEND_GITLAB_REF]=${CUDNN_FRONTEND_GITLAB_REF}" \
-            --form "variables[CUDNN_FRONTEND_GITHUB_REF]=${CUDNN_FRONTEND_GITHUB_REF}" \
+            --form "variables[CUDNN_FRONTEND_OVERRIDE]=${CUDNN_FRONTEND_OVERRIDE}" \
             --form "variables[CUDNN_BACKEND_URL]=${CUDNN_BACKEND_URL}" \
             --form "variables[INSTALL_FA3]=${INSTALL_FA3}" \
             --form "variables[PIPELINE_NAME]=${PIPELINE_NAME}" \
